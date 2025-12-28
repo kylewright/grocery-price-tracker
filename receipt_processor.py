@@ -43,14 +43,17 @@ def extract_text_from_image(image_path):
             logger.info(f"Converting image from {image.mode} to RGB")
             image = image.convert('RGB')
 
-        # Resize if image is too large (over 4000px in any dimension)
-        max_dimension = 4000
+        # Only resize if image is EXTREMELY large (over 10000px)
+        # For OCR, larger is better - don't destroy text quality
+        max_dimension = 10000
         if image.size[0] > max_dimension or image.size[1] > max_dimension:
-            logger.info(f"Image is large ({image.size}), resizing for better performance")
+            logger.info(f"Image is extremely large ({image.size}), resizing slightly")
             ratio = min(max_dimension / image.size[0], max_dimension / image.size[1])
             new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logger.info(f"Resized to: {image.size}")
+        else:
+            logger.info(f"Keeping original size {image.size} for best OCR quality")
 
         # Try multiple preprocessing approaches and use the best result
         logger.info("Trying multiple OCR preprocessing approaches...")
