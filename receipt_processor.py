@@ -52,28 +52,46 @@ def extract_text_from_image(image_path):
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logger.info(f"Resized to: {image.size}")
 
-        # Preprocess image for better OCR
-        logger.info("Preprocessing image for OCR...")
+        # Try multiple preprocessing approaches and use the best result
+        logger.info("Trying multiple OCR preprocessing approaches...")
 
-        # Convert to grayscale
-        image = image.convert('L')
+        best_text = ""
+        best_char_count = 0
 
-        # Enhance contrast
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.0)
+        # Approach 1: Simple grayscale with high contrast
+        logger.info("Attempt 1: High contrast grayscale...")
+        img1 = image.convert('L')
+        enhancer = ImageEnhance.Contrast(img1)
+        img1 = enhancer.enhance(3.0)
+        text1 = pytesseract.image_to_string(img1, config=r'--oem 3 --psm 6')
+        logger.info(f"Approach 1: {len(text1)} characters")
+        if len(text1) > best_char_count:
+            best_text = text1
+            best_char_count = len(text1)
 
-        # Enhance sharpness
-        enhancer = ImageEnhance.Sharpness(image)
-        image = enhancer.enhance(2.0)
+        # Approach 2: Binary threshold
+        logger.info("Attempt 2: Binary threshold...")
+        img2 = image.convert('L')
+        # Convert to black and white with threshold
+        threshold = 128
+        img2 = img2.point(lambda x: 0 if x < threshold else 255, '1')
+        text2 = pytesseract.image_to_string(img2, config=r'--oem 3 --psm 6')
+        logger.info(f"Approach 2: {len(text2)} characters")
+        if len(text2) > best_char_count:
+            best_text = text2
+            best_char_count = len(text2)
 
-        # Apply slight denoising
-        image = image.filter(ImageFilter.MedianFilter(size=3))
+        # Approach 3: Minimal processing with PSM 4 (single column)
+        logger.info("Attempt 3: Minimal processing, PSM 4...")
+        img3 = image.convert('L')
+        text3 = pytesseract.image_to_string(img3, config=r'--oem 3 --psm 4')
+        logger.info(f"Approach 3: {len(text3)} characters")
+        if len(text3) > best_char_count:
+            best_text = text3
+            best_char_count = len(text3)
 
-        logger.info("Running Tesseract OCR with optimized settings...")
-        # Use Tesseract with custom config for better receipt recognition
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, config=custom_config)
-        logger.info(f"OCR completed. Extracted {len(text)} characters")
+        text = best_text
+        logger.info(f"OCR completed. Using best result with {len(text)} characters")
 
         return text
     except Exception as e:
