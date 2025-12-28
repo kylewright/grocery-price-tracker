@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grocery Price Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Grocery Price Tracker</h1>
+            <p>Track grocery prices over time by uploading receipt photos</p>
+        </header>
+
+        <nav>
+            <a href="/" class="active">Upload Receipt</a>
+            <a href="/items">View All Items</a>
+        </nav>
+
+        <div class="upload-section">
+            <h2>Upload Receipt</h2>
+
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="store_name">Store Name (Optional):</label>
+                    <input type="text" id="store_name" name="store_name" placeholder="e.g., Walmart, Target">
+                </div>
+
+                <div class="form-group">
+                    <label for="receipt">Receipt Image:</label>
+                    <input type="file" id="receipt" name="receipt" accept="image/*" capture="environment" required>
+                </div>
+
+                <div class="preview" id="preview"></div>
+
+                <button type="submit" class="btn-primary">Process Receipt</button>
+            </form>
+
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Processing receipt...</p>
+            </div>
+
+            <div id="results" class="results" style="display: none;"></div>
+        </div>
+
+        <div class="recent-section">
+            <h2>Recent Uploads</h2>
+            {% if recent_uploads %}
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Price</th>
+                            <th>Store</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in recent_uploads %}
+                        <tr>
+                            <td>{{ item.name }}</td>
+                            <td>${{ "%.2f"|format(item.price) }}</td>
+                            <td>{{ item.store_name or 'N/A' }}</td>
+                            <td>{{ item.date }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p class="no-data">No recent uploads. Upload your first receipt to get started!</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        const uploadForm = document.getElementById('uploadForm');
+        const receiptInput = document.getElementById('receipt');
+        const preview = document.getElementById('preview');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+
+        // Preview image before upload
+        receiptInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.innerHTML = `<img src="${e.target.result}" alt="Receipt preview">`;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Handle form submission
+        uploadForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(uploadForm);
+
+            // Show loading, hide results
+            loading.style.display = 'block';
+            results.style.display = 'none';
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                loading.style.display = 'none';
+
+                if (data.success) {
+                    displayResults(data);
+                } else {
+                    displayError(data.error || 'Unknown error occurred');
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                displayError('Error uploading receipt: ' + error.message);
+            }
+        });
+
+        function displayResults(data) {
+            results.style.display = 'block';
+
+            let html = `
+                <div class="success-message">
+                    <h3>✓ Receipt Processed Successfully!</h3>
+                    <p>Found <strong>${data.items_count}</strong> items${data.store_name ? ' from ' + data.store_name : ''}</p>
+                </div>
+            `;
+
+            if (data.items && data.items.length > 0) {
+                html += '<table class="items-table"><thead><tr><th>Item</th><th>Price</th></tr></thead><tbody>';
+                data.items.forEach(item => {
+                    html += `<tr><td>${item.name}</td><td>$${item.price.toFixed(2)}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            html += '<button class="btn-secondary" onclick="location.reload()">Upload Another Receipt</button>';
+
+            results.innerHTML = html;
+
+            // Reset form
+            uploadForm.reset();
+            preview.innerHTML = '';
+        }
+
+        function displayError(message) {
+            results.style.display = 'block';
+            results.innerHTML = `
+                <div class="error-message">
+                    <h3>Error</h3>
+                    <p>${message}</p>
+                </div>
+                <button class="btn-secondary" onclick="results.style.display='none'">Try Again</button>
+            `;
+        }
+    </script>
+</body>
+</html>

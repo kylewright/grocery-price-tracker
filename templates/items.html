@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Items - Grocery Price Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Grocery Price Tracker</h1>
+            <p>Track grocery prices over time</p>
+        </header>
+
+        <nav>
+            <a href="/">Upload Receipt</a>
+            <a href="/items" class="active">View All Items</a>
+        </nav>
+
+        <div class="items-section">
+            <h2>All Tracked Items ({{ items|length }})</h2>
+
+            {% if items %}
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search items..." onkeyup="filterItems()">
+                </div>
+
+                <table class="items-table" id="itemsTable">
+                    <thead>
+                        <tr>
+                            <th onclick="sortTable(0)">Item Name ↕</th>
+                            <th onclick="sortTable(1)">Latest Price ↕</th>
+                            <th onclick="sortTable(2)">Last Seen ↕</th>
+                            <th onclick="sortTable(3)">Store ↕</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            <td class="item-name">{{ item.name }}</td>
+                            <td class="item-price">
+                                {% if item.latest_price %}
+                                    ${{ "%.2f"|format(item.latest_price) }}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
+                            <td>{{ item.latest_date or 'N/A' }}</td>
+                            <td>{{ item.store_name or 'N/A' }}</td>
+                            <td>
+                                <button class="btn-small" onclick="viewHistory({{ item.id }}, '{{ item.name }}')">
+                                    View History
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p class="no-data">No items tracked yet. Upload a receipt to get started!</p>
+                <a href="/" class="btn-primary">Upload Receipt</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Modal for price history -->
+    <div id="historyModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2 id="modalTitle">Price History</h2>
+            <div id="historyContent"></div>
+        </div>
+    </div>
+
+    <script>
+        function filterItems() {
+            const input = document.getElementById('searchInput');
+            const filter = input.value.toLowerCase();
+            const table = document.getElementById('itemsTable');
+            const rows = table.getElementsByTagName('tr');
+
+            for (let i = 1; i < rows.length; i++) {
+                const nameCell = rows[i].getElementsByClassName('item-name')[0];
+                if (nameCell) {
+                    const textValue = nameCell.textContent || nameCell.innerText;
+                    rows[i].style.display = textValue.toLowerCase().indexOf(filter) > -1 ? '' : 'none';
+                }
+            }
+        }
+
+        function sortTable(columnIndex) {
+            const table = document.getElementById('itemsTable');
+            const rows = Array.from(table.rows).slice(1);
+            const isAscending = table.dataset.sortOrder === 'asc';
+
+            rows.sort((a, b) => {
+                const aValue = a.cells[columnIndex].textContent.trim();
+                const bValue = b.cells[columnIndex].textContent.trim();
+
+                // Handle numeric values (prices)
+                if (columnIndex === 1) {
+                    const aNum = parseFloat(aValue.replace('$', '')) || 0;
+                    const bNum = parseFloat(bValue.replace('$', '')) || 0;
+                    return isAscending ? aNum - bNum : bNum - aNum;
+                }
+
+                // Handle text values
+                return isAscending
+                    ? aValue.localeCompare(bValue)
+                    : bValue.localeCompare(aValue);
+            });
+
+            rows.forEach(row => table.tBodies[0].appendChild(row));
+            table.dataset.sortOrder = isAscending ? 'desc' : 'asc';
+        }
+
+        async function viewHistory(itemId, itemName) {
+            const modal = document.getElementById('historyModal');
+            const title = document.getElementById('modalTitle');
+            const content = document.getElementById('historyContent');
+
+            title.textContent = `Price History: ${itemName}`;
+            content.innerHTML = '<p>Loading...</p>';
+            modal.style.display = 'block';
+
+            try {
+                const response = await fetch(`/items/${itemId}/history`);
+                const history = await response.json();
+
+                if (history.length === 0) {
+                    content.innerHTML = '<p>No price history available.</p>';
+                    return;
+                }
+
+                let html = '<table class="items-table"><thead><tr><th>Date</th><th>Price</th><th>Store</th></tr></thead><tbody>';
+                history.forEach(record => {
+                    html += `
+                        <tr>
+                            <td>${record.date}</td>
+                            <td>$${record.price.toFixed(2)}</td>
+                            <td>${record.store_name || 'N/A'}</td>
+                        </tr>
+                    `;
+                });
+                html += '</tbody></table>';
+
+                content.innerHTML = html;
+            } catch (error) {
+                content.innerHTML = `<p class="error-message">Error loading history: ${error.message}</p>`;
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('historyModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+            const modal = document.getElementById('historyModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
