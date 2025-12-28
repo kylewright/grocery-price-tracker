@@ -4,6 +4,10 @@ Receipt processing module using OCR and text parsing.
 import re
 from PIL import Image
 import pytesseract
+from pillow_heif import register_heif_opener
+
+# Register HEIF/HEIC format support for PIL
+register_heif_opener()
 
 
 def extract_text_from_image(image_path):
