@@ -79,40 +79,58 @@ def parse_receipt_text(text):
     Returns:
         List of tuples (item_name, price)
     """
+    logger.info("Parsing receipt text...")
+    logger.info(f"First 500 characters of OCR text:\n{text[:500]}")
+
     items = []
     lines = text.split('\n')
 
     # Pattern to match prices: digits with optional decimal points
-    # Matches formats like: 1.99, $1.99, 10.50, etc.
-    price_pattern = r'\$?(\d+\.\d{2})'
+    # More flexible patterns to match various formats
+    price_patterns = [
+        r'\$\s?(\d+\.\d{2})',      # $1.99 or $ 1.99
+        r'(\d+\.\d{2})\s*$',        # 1.99 at end of line
+        r'\s(\d+\.\d{2})\s',        # 1.99 with spaces around it
+        r'\$(\d+\.\d{2})',          # $1.99
+    ]
 
     for i, line in enumerate(lines):
         line = line.strip()
         if not line:
             continue
 
-        # Look for price patterns in the line
-        price_matches = re.findall(price_pattern, line)
+        # Try each price pattern
+        price_matches = []
+        for pattern in price_patterns:
+            matches = re.findall(pattern, line)
+            price_matches.extend(matches)
 
         if price_matches:
             # Get the last price on the line (usually the actual item price)
-            price = float(price_matches[-1])
+            try:
+                price = float(price_matches[-1])
+            except ValueError:
+                continue
 
             # Extract item name (everything before the price)
             # Remove the price and clean up the item name
-            item_name = re.sub(r'\$?\d+\.\d{2}', '', line).strip()
+            item_name = re.sub(r'\$?\s?\d+\.\d{2}', '', line).strip()
 
             # Clean up common receipt artifacts
             item_name = re.sub(r'\s+', ' ', item_name)  # Multiple spaces to single space
             item_name = re.sub(r'^\d+\s+', '', item_name)  # Remove leading numbers (quantities)
             item_name = re.sub(r'[*@#]', '', item_name)  # Remove special characters
+            item_name = item_name.strip()
 
             # Skip if item name is too short or looks like a total/subtotal
-            if len(item_name) > 2 and not any(word in item_name.lower() for word in
-                                              ['total', 'subtotal', 'tax', 'change', 'cash', 'credit', 'debit',
-                                               'balance', 'tender', 'payment']):
+            skip_words = ['total', 'subtotal', 'tax', 'change', 'cash', 'credit', 'debit',
+                         'balance', 'tender', 'payment', 'discount', 'coupon', 'savings']
+
+            if len(item_name) > 2 and not any(word in item_name.lower() for word in skip_words):
+                logger.info(f"Found item: '{item_name}' - ${price:.2f}")
                 items.append((item_name, price))
 
+    logger.info(f"Total items parsed: {len(items)}")
     return items
 
 
