@@ -128,5 +128,41 @@ def api_items():
     } for row in items])
 
 
+@app.route('/add-item', methods=['POST'])
+def add_item_manual():
+    """Manually add an item with price."""
+    data = request.get_json()
+
+    item_name = data.get('item_name', '').strip()
+    price = data.get('price')
+    store_name = data.get('store_name', '').strip() or None
+
+    if not item_name or price is None:
+        return jsonify({'error': 'Item name and price are required'}), 400
+
+    try:
+        price = float(price)
+        if price <= 0 or price > 1000:
+            return jsonify({'error': 'Price must be between 0 and 1000'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid price format'}), 400
+
+    try:
+        item_id, price_record_id = upsert_item_with_price(
+            item_name=item_name,
+            price=price,
+            store_name=store_name
+        )
+
+        return jsonify({
+            'success': True,
+            'item_id': item_id,
+            'item_name': item_name,
+            'price': price
+        })
+    except Exception as e:
+        return jsonify({'error': f'Error adding item: {str(e)}'}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)

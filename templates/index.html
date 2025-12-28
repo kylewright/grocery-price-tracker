@@ -45,6 +45,32 @@
             <div id="results" class="results" style="display: none;"></div>
         </div>
 
+        <div class="upload-section">
+            <h2>Manual Entry</h2>
+            <p>If OCR doesn't work well, you can manually enter items here:</p>
+
+            <form id="manualForm">
+                <div class="form-group">
+                    <label for="manual_item_name">Item Name:</label>
+                    <input type="text" id="manual_item_name" name="item_name" placeholder="e.g., Milk Whole Gallon" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="manual_price">Price:</label>
+                    <input type="number" id="manual_price" name="price" step="0.01" min="0.01" max="999.99" placeholder="e.g., 3.99" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="manual_store_name">Store Name (Optional):</label>
+                    <input type="text" id="manual_store_name" name="store_name" placeholder="e.g., Walmart">
+                </div>
+
+                <button type="submit" class="btn-primary">Add Item</button>
+            </form>
+
+            <div id="manualResults" class="results" style="display: none;"></div>
+        </div>
+
         <div class="recent-section">
             <h2>Recent Uploads</h2>
             {% if recent_uploads %}
@@ -161,6 +187,62 @@
                 <button class="btn-secondary" onclick="results.style.display='none'">Try Again</button>
             `;
         }
+
+        // Manual entry form handler
+        const manualForm = document.getElementById('manualForm');
+        const manualResults = document.getElementById('manualResults');
+
+        manualForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const itemName = document.getElementById('manual_item_name').value;
+            const price = document.getElementById('manual_price').value;
+            const storeName = document.getElementById('manual_store_name').value;
+
+            try {
+                const response = await fetch('/add-item', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        item_name: itemName,
+                        price: price,
+                        store_name: storeName
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    manualResults.style.display = 'block';
+                    manualResults.innerHTML = `
+                        <div class="success-message">
+                            <h3>✓ Item Added Successfully!</h3>
+                            <p><strong>${data.item_name}</strong> - $${parseFloat(data.price).toFixed(2)}</p>
+                        </div>
+                        <button class="btn-secondary" onclick="location.reload()">Add Another Item</button>
+                    `;
+                    manualForm.reset();
+                } else {
+                    manualResults.style.display = 'block';
+                    manualResults.innerHTML = `
+                        <div class="error-message">
+                            <h3>Error</h3>
+                            <p>${data.error}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                manualResults.style.display = 'block';
+                manualResults.innerHTML = `
+                    <div class="error-message">
+                        <h3>Error</h3>
+                        <p>Failed to add item: ${error.message}</p>
+                    </div>
+                `;
+            }
+        });
     </script>
 </body>
 </html>
