@@ -82,7 +82,7 @@ python app.py
 ```
 
 2. **Open your browser**
-Navigate to: http://localhost:5000
+Navigate to: http://localhost:5001
 
 3. **Upload a receipt**
    - Click "Choose File" to upload an existing image, or use your device camera
