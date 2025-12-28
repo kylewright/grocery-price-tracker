@@ -3,7 +3,7 @@ Receipt processing module using OCR and text parsing.
 """
 import re
 import logging
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
 from pillow_heif import register_heif_opener
 
@@ -52,9 +52,27 @@ def extract_text_from_image(image_path):
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logger.info(f"Resized to: {image.size}")
 
-        logger.info("Running Tesseract OCR...")
-        # Use Tesseract to extract text
-        text = pytesseract.image_to_string(image)
+        # Preprocess image for better OCR
+        logger.info("Preprocessing image for OCR...")
+
+        # Convert to grayscale
+        image = image.convert('L')
+
+        # Enhance contrast
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(2.0)
+
+        # Enhance sharpness
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(2.0)
+
+        # Apply slight denoising
+        image = image.filter(ImageFilter.MedianFilter(size=3))
+
+        logger.info("Running Tesseract OCR with optimized settings...")
+        # Use Tesseract with custom config for better receipt recognition
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(image, config=custom_config)
         logger.info(f"OCR completed. Extracted {len(text)} characters")
 
         return text
@@ -86,12 +104,15 @@ def parse_receipt_text(text):
     lines = text.split('\n')
 
     # Pattern to match prices: digits with optional decimal points
-    # More flexible patterns to match various formats
+    # More flexible patterns to match various formats including OCR errors
     price_patterns = [
-        r'\$\s?(\d+\.\d{2})',      # $1.99 or $ 1.99
-        r'(\d+\.\d{2})\s*$',        # 1.99 at end of line
-        r'\s(\d+\.\d{2})\s',        # 1.99 with spaces around it
-        r'\$(\d+\.\d{2})',          # $1.99
+        r'\$\s?(\d+\.\d{2})',           # $1.99 or $ 1.99
+        r'(\d+\.\d{2})\s*$',            # 1.99 at end of line
+        r'\s(\d+\.\d{2})\s',            # 1.99 with spaces around it
+        r'\$(\d+\.\d{2})',              # $1.99
+        r"(\d+)'(\d{2})\$",             # OCR error: 2'99$ instead of $2.99
+        r'(\d+)[,\'](\d{2})',           # OCR error: 2,99 or 2'99
+        r'\$\s?(\d+)[,\'](\d{2})',      # OCR error: $2,99 or $2'99
     ]
 
     for i, line in enumerate(lines):
@@ -103,23 +124,34 @@ def parse_receipt_text(text):
         price_matches = []
         for pattern in price_patterns:
             matches = re.findall(pattern, line)
-            price_matches.extend(matches)
+            for match in matches:
+                # Handle tuple results from multi-group patterns
+                if isinstance(match, tuple):
+                    # Join tuple parts (e.g., ('2', '99') -> '2.99')
+                    price_str = '.'.join(match)
+                else:
+                    price_str = match
+                price_matches.append(price_str)
 
         if price_matches:
             # Get the last price on the line (usually the actual item price)
             try:
                 price = float(price_matches[-1])
+                # Skip unrealistic prices
+                if price <= 0 or price > 1000:
+                    continue
             except ValueError:
                 continue
 
             # Extract item name (everything before the price)
             # Remove the price and clean up the item name
-            item_name = re.sub(r'\$?\s?\d+\.\d{2}', '', line).strip()
+            item_name = re.sub(r'\$?\s?\d+[\.\,\']\d{2}\$?', '', line).strip()  # Remove price patterns
+            item_name = re.sub(r'\$?\s?\d+\.\d{2}', '', item_name).strip()
 
             # Clean up common receipt artifacts
             item_name = re.sub(r'\s+', ' ', item_name)  # Multiple spaces to single space
             item_name = re.sub(r'^\d+\s+', '', item_name)  # Remove leading numbers (quantities)
-            item_name = re.sub(r'[*@#]', '', item_name)  # Remove special characters
+            item_name = re.sub(r'[*@#\[\]]', '', item_name)  # Remove special characters
             item_name = item_name.strip()
 
             # Skip if item name is too short or looks like a total/subtotal
