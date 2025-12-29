@@ -5,7 +5,7 @@ A web-based application to track grocery prices over time by processing receipt 
 ## Features
 
 - **Receipt Upload**: Take photos with your device camera or upload existing receipt images
-- **Automatic Processing**: Uses Tesseract OCR to extract items and prices from receipts
+- **Automatic Processing**: Uses Donut (Document Understanding Transformer) AI model to extract items and prices from receipts
 - **Price Tracking**: Stores historical pricing data for all grocery items
 - **Price History**: View price changes over time for individual items
 - **Search & Filter**: Easily search and sort through tracked items
@@ -15,37 +15,18 @@ A web-based application to track grocery prices over time by processing receipt 
 
 - **Backend**: Python Flask
 - **Database**: SQLite
-- **OCR**: Tesseract OCR with pytesseract
+- **AI/OCR**: Donut (Document Understanding Transformer) - naver-clova-ix/donut-base-finetuned-cord-v2
+- **Deep Learning**: PyTorch and Hugging Face Transformers
 - **Frontend**: HTML, CSS, JavaScript
 - **Image Processing**: Pillow (PIL)
 
 ## Prerequisites
 
-Before running this application, you need to install:
+Before running this application, you need:
 
-1. **Python 3.7+**
-2. **Tesseract OCR**
-
-### Installing Tesseract OCR
-
-#### Ubuntu/Debian
-```bash
-sudo apt-get update
-sudo apt-get install tesseract-ocr
-```
-
-#### macOS
-```bash
-brew install tesseract
-```
-
-#### Windows
-Download and install from: https://github.com/UB-Mannheim/tesseract/wiki
-
-After installation, verify with:
-```bash
-tesseract --version
-```
+1. **Python 3.8+**
+2. **Sufficient disk space**: The Donut model is ~800MB and will be downloaded automatically on first use
+3. **GPU (Optional)**: CUDA-compatible GPU for faster processing (CPU works but is slower)
 
 ## Installation
 
@@ -70,6 +51,8 @@ venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note**: The first time you run the application, it will automatically download the Donut model (~800MB) from Hugging Face. This is a one-time download.
 
 4. **Initialize the database**
 The database will be automatically created when you first run the application.
@@ -140,20 +123,27 @@ grocery-price-tracker/
 
 1. **Image Quality**: Use clear, well-lit photos of receipts
 2. **Orientation**: Ensure receipt is upright and flat
-3. **Resolution**: Higher resolution images generally work better
-4. **Contrast**: Good contrast between text and background improves accuracy
-5. **Manual Editing**: After OCR processing, verify extracted items for accuracy
+3. **Receipt Type**: The Donut model is fine-tuned on receipts and works best with standard printed receipts
+4. **Structured Data**: Donut extracts structured JSON including items, prices, subtotals, and totals
+5. **Manual Editing**: After processing, verify extracted items for accuracy
 
 ## Troubleshooting
 
-### OCR Not Working
-- Ensure Tesseract is installed and accessible in your PATH
-- Try: `which tesseract` (Linux/macOS) or `where tesseract` (Windows)
+### Model Download Issues
+- Ensure you have a stable internet connection for the initial ~800MB model download
+- The model is cached locally after the first download
+- Check that you have sufficient disk space (~1GB free)
 
 ### No Items Detected
+- The Donut model is specifically trained on receipt data and should work well with most receipts
 - Check image quality and lighting
 - Ensure receipt text is clear and readable
-- Try a different image or manual entry
+- Try a different image or use manual entry as a fallback
+
+### Slow Processing
+- First-time processing may be slow due to model loading
+- GPU acceleration (CUDA) significantly speeds up processing
+- CPU-only processing works but takes longer (~10-30 seconds per receipt)
 
 ### Database Errors
 - Delete `grocery_prices.db` and restart the application to recreate the database
