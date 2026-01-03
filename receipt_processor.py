@@ -110,13 +110,17 @@ def extract_text_from_image(image_path):
 
         # Generate output
         logger.info("Running Donut model inference...")
+        # Use max_new_tokens instead of max_length to allow longer generation
+        # Receipts can be long, so we set a high limit
         outputs = model.generate(
             pixel_values,
             decoder_input_ids=decoder_input_ids,
-            max_length=model.decoder.config.max_position_embeddings,
+            max_new_tokens=2048,  # Allow up to 2048 new tokens for long receipts
+            early_stopping=True,
             pad_token_id=processor.tokenizer.pad_token_id,
             eos_token_id=processor.tokenizer.eos_token_id,
             use_cache=True,
+            num_beams=1,
             bad_words_ids=[[processor.tokenizer.unk_token_id]],
             return_dict_in_generate=True,
         )
