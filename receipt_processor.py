@@ -101,30 +101,26 @@ def extract_text_from_image(image_path, model=DEFAULT_MODEL):
         logger.info(f"Image encoded, size: {len(base64_image)} characters")
 
         # Prepare the prompt for receipt extraction
-        prompt = """Analyze this grocery receipt image and extract each line item with its price.
+        prompt = """Extract items from this grocery receipt image. Return ONLY valid JSON.
 
-Instructions:
-1. Extract ONLY items that appear as products on the receipt
-2. Use the exact item name as printed
-3. Use the individual item price (not quantity × unit price)
-4. Skip: tax lines, subtotals, totals, payment info, bottle deposits
-5. Do NOT duplicate items - each unique line should appear once
+CRITICAL RULES:
+1. Extract each product line EXACTLY ONCE - never repeat items
+2. If an item appears multiple times on the receipt with the same price, list it only ONCE
+3. Use the exact item name as printed on the receipt
+4. Stop after extracting all unique items - do NOT continue generating
 
-Return a valid JSON object with this exact structure:
+JSON format (no markdown, no extra text):
 {
   "items": [
-    {"name": "ITEM NAME", "price": 1.99},
-    {"name": "ANOTHER ITEM", "price": 2.49}
+    {"name": "ITEM 1", "price": 1.99},
+    {"name": "ITEM 2", "price": 2.49}
   ],
   "subtotal": 10.50,
   "total": 11.50,
   "store_name": "Store Name"
 }
 
-Requirements:
-- Price must be a number (float), not a string
-- Extract each item ONCE - do not repeat
-- Return ONLY valid JSON, no markdown formatting or extra text"""
+Skip: tax, subtotal lines, payment info, bottle deposits"""
 
         # Make API request to OpenRouter
         headers = {
@@ -188,22 +184,34 @@ Requirements:
             response_text = response_text[:-3]  # Remove trailing ```
         response_text = response_text.strip()
 
-        # Try to fix incomplete JSON by adding closing brackets if needed
+        # Try to fix incomplete JSON by truncating to last valid item
         if not response_text.endswith('}'):
-            logger.warning("JSON appears incomplete, attempting to fix...")
-            # Count opening and closing brackets
-            open_braces = response_text.count('{')
-            close_braces = response_text.count('}')
-            open_brackets = response_text.count('[')
-            close_brackets = response_text.count(']')
+            logger.warning("JSON appears incomplete, attempting to repair by truncating to last valid item...")
 
-            # Add missing closing brackets
-            if open_brackets > close_brackets:
-                response_text += ']' * (open_brackets - close_brackets)
-            if open_braces > close_braces:
-                response_text += '}' * (open_braces - close_braces)
+            # Find the last complete item entry before truncation
+            # Look for the last occurrence of "},\n" or "}," which indicates end of an item
+            last_valid_item = response_text.rfind('},')
 
-            logger.info(f"Fixed JSON (last 200 chars): ...{response_text[-200:]}")
+            if last_valid_item != -1:
+                # Truncate at the last valid item
+                response_text = response_text[:last_valid_item + 1]  # Keep the }
+
+                # Now close the items array and add closing fields
+                response_text += '\n  ],\n  "subtotal": 0,\n  "total": 0,\n  "store_name": ""\n}'
+
+                logger.info(f"Truncated response to last valid item at position {last_valid_item}")
+            else:
+                logger.warning("Could not find valid truncation point, attempting bracket closure...")
+                # Fallback: just close brackets
+                open_braces = response_text.count('{')
+                close_braces = response_text.count('}')
+                open_brackets = response_text.count('[')
+                close_brackets = response_text.count(']')
+
+                if open_brackets > close_brackets:
+                    response_text += ']' * (open_brackets - close_brackets)
+                if open_braces > close_braces:
+                    response_text += '}' * (open_braces - close_braces)
 
         # Parse JSON
         parsed_data = json.loads(response_text)
@@ -236,6 +244,7 @@ def parse_receipt_data(api_output):
     """
     logger.info("Parsing API output...")
     items = []
+    seen_items = {}  # Track items to detect and remove duplicates/hallucinations
 
     try:
         # Extract items from API output
@@ -246,11 +255,9 @@ def parse_receipt_data(api_output):
             logger.warning(f"Available keys in output: {list(api_output.keys())}")
             return items
 
-        logger.info(f"Found {len(items_list)} items in API output")
+        logger.info(f"Found {len(items_list)} raw items in API output")
 
         for idx, item in enumerate(items_list):
-            logger.info(f"Processing item {idx + 1}: {item}")
-
             # Extract name and price
             item_name = item.get('name', '').strip()
             price = item.get('price', 0)
@@ -268,16 +275,33 @@ def parse_receipt_data(api_output):
 
             # Skip invalid items
             if not item_name or price <= 0 or price > 1000:
-                logger.warning(f"Skipping invalid item: '{item_name}' - ${price} (empty name or invalid price)")
                 continue
 
-            logger.info(f"Found valid item: '{item_name}' - ${price:.2f}")
-            items.append((item_name, price))
+            # Create a key for deduplication (name + price)
+            item_key = f"{item_name.lower()}_{price:.2f}"
+
+            # Check for hallucination: if we've seen this exact item more than 3 times, stop processing
+            if item_key in seen_items:
+                seen_items[item_key] += 1
+                if seen_items[item_key] > 3:
+                    logger.warning(f"Detected hallucination: '{item_name}' repeated {seen_items[item_key]} times. Stopping item extraction.")
+                    break
+            else:
+                seen_items[item_key] = 1
+                # Only add unique items
+                logger.info(f"Found valid item: '{item_name}' - ${price:.2f}")
+                items.append((item_name, price))
 
     except Exception as e:
         logger.error(f"Error parsing API output: {type(e).__name__}: {str(e)}", exc_info=True)
 
-    logger.info(f"Total items parsed: {len(items)}")
+    logger.info(f"Total unique items parsed: {len(items)}")
+
+    # Log if we detected hallucination
+    max_repeats = max(seen_items.values()) if seen_items else 0
+    if max_repeats > 3:
+        logger.warning(f"Hallucination detected! Maximum item repetition: {max_repeats} times")
+
     return items
 
 
