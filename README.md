@@ -5,7 +5,7 @@ A web-based application to track grocery prices over time by processing receipt 
 ## Features
 
 - **Receipt Upload**: Take photos with your device camera or upload existing receipt images
-- **Automatic Processing**: Uses Donut (Document Understanding Transformer) AI model to extract items and prices from receipts
+- **Automatic Processing**: Uses OpenRouter with GPT-4 Vision to extract items and prices from receipts with high accuracy
 - **Price Tracking**: Stores historical pricing data for all grocery items
 - **Price History**: View price changes over time for individual items
 - **Search & Filter**: Easily search and sort through tracked items
@@ -15,8 +15,7 @@ A web-based application to track grocery prices over time by processing receipt 
 
 - **Backend**: Python Flask
 - **Database**: SQLite
-- **AI/OCR**: Donut (Document Understanding Transformer) - naver-clova-ix/donut-base-finetuned-cord-v2
-- **Deep Learning**: PyTorch and Hugging Face Transformers
+- **AI/OCR**: OpenRouter API with GPT-4 Vision (or Claude 3.5 Sonnet)
 - **Frontend**: HTML, CSS, JavaScript
 - **Image Processing**: Pillow (PIL)
 
@@ -25,8 +24,9 @@ A web-based application to track grocery prices over time by processing receipt 
 Before running this application, you need:
 
 1. **Python 3.8+**
-2. **Sufficient disk space**: The Donut model is ~800MB and will be downloaded automatically on first use
-3. **GPU (Optional)**: CUDA-compatible GPU for faster processing (CPU works but is slower)
+2. **OpenRouter API Key**: Sign up at [OpenRouter.ai](https://openrouter.ai/) to get an API key
+   - Free tier available for testing
+   - Pay-as-you-go pricing (very affordable for OCR tasks)
 
 ## Installation
 
@@ -52,9 +52,21 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-**Note**: The first time you run the application, it will automatically download the Donut model (~800MB) from Hugging Face. This is a one-time download.
+4. **Set up your OpenRouter API key**
+```bash
+# On Linux/macOS
+export OPENROUTER_API_KEY='your-api-key-here'
 
-4. **Initialize the database**
+# On Windows (Command Prompt)
+set OPENROUTER_API_KEY=your-api-key-here
+
+# On Windows (PowerShell)
+$env:OPENROUTER_API_KEY='your-api-key-here'
+```
+
+Alternatively, add it to your shell profile (~/.bashrc, ~/.zshrc, etc.) to make it permanent.
+
+5. **Initialize the database**
 The database will be automatically created when you first run the application.
 
 ## Usage
@@ -123,27 +135,27 @@ grocery-price-tracker/
 
 1. **Image Quality**: Use clear, well-lit photos of receipts
 2. **Orientation**: Ensure receipt is upright and flat
-3. **Receipt Type**: The Donut model is fine-tuned on receipts and works best with standard printed receipts
-4. **Structured Data**: Donut extracts structured JSON including items, prices, subtotals, and totals
-5. **Manual Editing**: After processing, verify extracted items for accuracy
+3. **Receipt Type**: Works with all receipt types - printed, handwritten, or digital
+4. **API Costs**: GPT-4 Vision costs ~$0.01-0.03 per receipt (check OpenRouter pricing)
+5. **Accuracy**: Vision models are highly accurate but always verify extracted data
 
 ## Troubleshooting
 
-### Model Download Issues
-- Ensure you have a stable internet connection for the initial ~800MB model download
-- The model is cached locally after the first download
-- Check that you have sufficient disk space (~1GB free)
+### API Key Issues
+- Ensure `OPENROUTER_API_KEY` environment variable is set correctly
+- Verify your API key is valid at [OpenRouter.ai](https://openrouter.ai/)
+- Check that you have credits/payment method configured on OpenRouter
 
 ### No Items Detected
-- The Donut model is specifically trained on receipt data and should work well with most receipts
 - Check image quality and lighting
 - Ensure receipt text is clear and readable
-- Try a different image or use manual entry as a fallback
+- Verify the receipt isn't too faded or damaged
+- Try uploading a different image
 
-### Slow Processing
-- First-time processing may be slow due to model loading
-- GPU acceleration (CUDA) significantly speeds up processing
-- CPU-only processing works but takes longer (~10-30 seconds per receipt)
+### Processing Time
+- Typical processing time: 5-15 seconds per receipt
+- Time varies based on API response speed
+- No local model loading required - starts immediately
 
 ### Database Errors
 - Delete `grocery_prices.db` and restart the application to recreate the database

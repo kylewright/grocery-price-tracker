@@ -1,11 +1,13 @@
 """
-Receipt processing module using Donut (Document Understanding Transformer).
+Receipt processing module using OpenRouter API with vision models.
 """
+import os
 import re
+import json
 import logging
-import torch
+import base64
 from PIL import Image
-from transformers import DonutProcessor, VisionEncoderDecoderModel
+import requests
 from pillow_heif import register_heif_opener
 
 # Configure logging
@@ -15,203 +17,240 @@ logger = logging.getLogger(__name__)
 # Register HEIF/HEIC format support for PIL
 register_heif_opener()
 
-# Global variables for model and processor (loaded once on first use)
-_model = None
-_processor = None
-_device = None
+# OpenRouter API configuration
+OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
+OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
+
+# Model to use - GPT-4 Vision is excellent for OCR tasks
+# Alternative: 'anthropic/claude-3.5-sonnet' or 'google/gemini-pro-vision'
+DEFAULT_MODEL = 'openai/gpt-4o'
 
 
-def load_donut_model():
+def encode_image_to_base64(image_path):
     """
-    Load the Donut model and processor.
-    Uses GPU if CUDA is available, otherwise falls back to CPU.
-    Model is loaded once and cached globally.
+    Encode an image to base64 for API transmission.
+
+    Args:
+        image_path: Path to the image file or PIL Image object
 
     Returns:
-        tuple: (model, processor, device)
+        Base64 encoded string of the image
     """
-    global _model, _processor, _device
+    try:
+        if isinstance(image_path, str):
+            # Load and convert image
+            image = Image.open(image_path)
+        else:
+            image = image_path
 
-    if _model is not None and _processor is not None:
-        logger.info(f"Using cached Donut model on {_device}")
-        return _model, _processor, _device
+        # Convert to RGB if needed
+        if image.mode in ('RGBA', 'LA', 'P'):
+            logger.info(f"Converting image from {image.mode} to RGB")
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            if image.mode == 'P':
+                image = image.convert('RGBA')
+            background.paste(image, mask=image.split()[-1] if image.mode in ('RGBA', 'LA') else None)
+            image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
 
-    logger.info("Loading Donut model (naver-clova-ix/donut-base-finetuned-cord-v2)...")
-    logger.info("This is a ~800MB model and may take a moment to download on first use...")
+        # Resize if too large (max 2048px for most vision models)
+        max_dimension = 2048
+        if image.size[0] > max_dimension or image.size[1] > max_dimension:
+            logger.info(f"Resizing image from {image.size}")
+            ratio = min(max_dimension / image.size[0], max_dimension / image.size[1])
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+            logger.info(f"Resized to: {image.size}")
 
-    # Determine device (GPU if available, otherwise CPU)
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {_device}")
+        # Save to bytes and encode
+        import io
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=95)
+        image_bytes = buffer.getvalue()
 
-    # Load processor and model
-    model_name = "naver-clova-ix/donut-base-finetuned-cord-v2"
-    _processor = DonutProcessor.from_pretrained(model_name)
-    _model = VisionEncoderDecoderModel.from_pretrained(model_name)
+        # Encode to base64
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        return base64_image
 
-    # Move model to appropriate device
-    _model.to(_device)
-
-    logger.info("Donut model loaded successfully")
-    return _model, _processor, _device
+    except Exception as e:
+        logger.error(f"Error encoding image: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise
 
 
-def extract_text_from_image(image_path):
+def extract_text_from_image(image_path, model=DEFAULT_MODEL):
     """
-    Extract structured data from a receipt image using Donut model.
+    Extract structured data from a receipt image using OpenRouter vision API.
 
     Args:
         image_path: Path to the receipt image (or PIL Image object)
+        model: OpenRouter model to use (default: GPT-4 Vision)
 
     Returns:
-        Dictionary with structured receipt data containing:
-        - menu: array of line items with nm (name), cnt (count), and price
-        - sub_total: subtotal price
-        - total: total price
+        Dictionary with structured receipt data containing items and prices
     """
     try:
-        # Load model and processor
-        model, processor, device = load_donut_model()
+        if not OPENROUTER_API_KEY:
+            raise Exception("OPENROUTER_API_KEY environment variable not set. Please set it with your OpenRouter API key.")
 
-        # Load image
-        logger.info(f"Processing image: {image_path}")
-        if isinstance(image_path, str):
-            image = Image.open(image_path)
-        else:
-            image = image_path  # Already a PIL Image
+        logger.info(f"Processing image with OpenRouter model: {model}")
+        logger.info(f"Image: {image_path}")
 
-        # Convert to RGB if needed
-        if image.mode != 'RGB':
-            logger.info(f"Converting image from {image.mode} to RGB")
-            if image.mode in ('RGBA', 'LA', 'P'):
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                if image.mode == 'P':
-                    image = image.convert('RGBA')
-                background.paste(image, mask=image.split()[-1] if image.mode in ('RGBA', 'LA') else None)
-                image = background
-            else:
-                image = image.convert('RGB')
+        # Encode image to base64
+        base64_image = encode_image_to_base64(image_path)
+        logger.info(f"Image encoded, size: {len(base64_image)} characters")
 
-        logger.info(f"Image size: {image.size}")
+        # Prepare the prompt for receipt extraction
+        prompt = """Please analyze this receipt image and extract ALL items with their prices in JSON format.
 
-        # Prepare decoder input with task prompt
-        task_prompt = "<s_cord-v2>"
-        decoder_input_ids = processor.tokenizer(
-            task_prompt,
-            add_special_tokens=False,
-            return_tensors="pt"
-        ).input_ids
+For each item on the receipt, extract:
+- The item name (product description)
+- The price (individual item price, not quantity × price)
 
-        # Process image
-        pixel_values = processor(image, return_tensors="pt").pixel_values
+Return ONLY a valid JSON object with this structure:
+{
+  "items": [
+    {"name": "ITEM NAME", "price": 1.99},
+    {"name": "ANOTHER ITEM", "price": 2.49}
+  ],
+  "subtotal": 10.50,
+  "total": 11.50,
+  "store_name": "Store Name"
+}
 
-        # Move to device
-        pixel_values = pixel_values.to(device)
-        decoder_input_ids = decoder_input_ids.to(device)
+Important:
+- Extract ALL line items from the receipt
+- Use the individual item price, not totals for quantities
+- Skip non-product lines (tax, subtotal, total, payment info)
+- Price should be a number (float), not a string
+- Return valid JSON only, no other text"""
 
-        # Generate output
-        logger.info("Running Donut model inference...")
-        # Use max_new_tokens instead of max_length to allow longer generation
-        # Receipts can be long, so we set a high limit
-        outputs = model.generate(
-            pixel_values,
-            decoder_input_ids=decoder_input_ids,
-            max_new_tokens=2048,  # Allow up to 2048 new tokens for long receipts
-            early_stopping=True,
-            pad_token_id=processor.tokenizer.pad_token_id,
-            eos_token_id=processor.tokenizer.eos_token_id,
-            use_cache=True,
-            num_beams=1,
-            bad_words_ids=[[processor.tokenizer.unk_token_id]],
-            return_dict_in_generate=True,
-        )
+        # Make API request to OpenRouter
+        headers = {
+            'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://github.com/kylewright/grocery-price-tracker',
+        }
 
-        # Decode output to JSON
-        sequence = processor.batch_decode(outputs.sequences)[0]
-        sequence = sequence.replace(processor.tokenizer.eos_token, "").replace(processor.tokenizer.pad_token, "")
-        sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()  # Remove first task token
+        payload = {
+            'model': model,
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': prompt
+                        },
+                        {
+                            'type': 'image_url',
+                            'image_url': {
+                                'url': f'data:image/jpeg;base64,{base64_image}'
+                            }
+                        }
+                    ]
+                }
+            ],
+            'max_tokens': 4000,
+            'temperature': 0.1,  # Low temperature for consistent, accurate extraction
+        }
 
-        logger.info(f"Raw model output (first 500 chars): {sequence[:500]}...")
-        logger.info(f"Full raw model output length: {len(sequence)} characters")
+        logger.info("Sending request to OpenRouter API...")
+        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
 
-        # Parse JSON output
-        result = processor.token2json(sequence)
-        logger.info(f"Parsed JSON structure keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-        logger.info(f"Full parsed JSON: {result}")
+        result = response.json()
+        logger.info(f"API Response status: {response.status_code}")
 
-        return result
+        # Extract the response text
+        if 'choices' not in result or len(result['choices']) == 0:
+            raise Exception(f"Unexpected API response format: {result}")
 
+        response_text = result['choices'][0]['message']['content']
+        logger.info(f"Raw API response (first 500 chars): {response_text[:500]}...")
+
+        # Parse JSON from response
+        # Sometimes the model wraps JSON in markdown code blocks
+        response_text = response_text.strip()
+        if response_text.startswith('```json'):
+            response_text = response_text[7:]  # Remove ```json
+        if response_text.startswith('```'):
+            response_text = response_text[3:]  # Remove ```
+        if response_text.endswith('```'):
+            response_text = response_text[:-3]  # Remove trailing ```
+        response_text = response_text.strip()
+
+        # Parse JSON
+        parsed_data = json.loads(response_text)
+        logger.info(f"Parsed JSON structure: {list(parsed_data.keys())}")
+        logger.info(f"Full parsed data: {parsed_data}")
+
+        return parsed_data
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request error: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise Exception(f"Error calling OpenRouter API: {type(e).__name__}: {str(e)}")
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing error: {str(e)}", exc_info=True)
+        logger.error(f"Response text was: {response_text}")
+        raise Exception(f"Error parsing API response as JSON: {str(e)}")
     except Exception as e:
-        logger.error(f"Error processing image with Donut: {type(e).__name__}: {str(e)}", exc_info=True)
-        raise Exception(f"Error processing image with Donut: {type(e).__name__}: {str(e)}")
+        logger.error(f"Error processing image: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise Exception(f"Error processing image: {type(e).__name__}: {str(e)}")
 
 
-def parse_receipt_data(donut_output):
+def parse_receipt_data(api_output):
     """
-    Parse Donut model output to extract items and prices.
-
-    The Donut CORD-v2 model outputs structured JSON with:
-    - menu: array of items with nm (name), cnt (count), and price
-    - sub_total: subtotal
-    - total: total price
+    Parse OpenRouter API output to extract items and prices.
 
     Args:
-        donut_output: Structured output from Donut model
+        api_output: Structured output from OpenRouter vision model
 
     Returns:
         List of tuples (item_name, price)
     """
-    logger.info("Parsing Donut output...")
-    logger.info(f"Full Donut output structure: {donut_output}")
+    logger.info("Parsing API output...")
     items = []
 
     try:
-        # Extract menu items from Donut output
-        menu_items = donut_output.get('menu', [])
+        # Extract items from API output
+        items_list = api_output.get('items', [])
 
-        if not menu_items:
-            logger.warning("No menu items found in Donut output")
-            logger.warning(f"Available keys in output: {list(donut_output.keys())}")
+        if not items_list:
+            logger.warning("No items found in API output")
+            logger.warning(f"Available keys in output: {list(api_output.keys())}")
             return items
 
-        logger.info(f"Found {len(menu_items)} menu items in Donut output")
+        logger.info(f"Found {len(items_list)} items in API output")
 
-        for idx, item in enumerate(menu_items):
+        for idx, item in enumerate(items_list):
             logger.info(f"Processing item {idx + 1}: {item}")
 
             # Extract name and price
-            item_name = item.get('nm', '').strip()
-            price_info = item.get('price', {})
+            item_name = item.get('name', '').strip()
+            price = item.get('price', 0)
 
-            # Price can be a dict with 'price' key or directly a string
-            if isinstance(price_info, dict):
-                # Could be {'price': '1.99'} or {'unitprice': '1.99', 'price': '3.98'}
-                price_str = price_info.get('price', price_info.get('unitprice', '0'))
-            else:
-                price_str = str(price_info)
-
-            logger.info(f"Item '{item_name}' has price_info: {price_info}, extracted price_str: {price_str}")
-
-            # Clean and parse price
-            # Remove currency symbols and convert to float
-            price_str = re.sub(r'[^\d.]', '', str(price_str))
-
+            # Ensure price is a float
             try:
-                price = float(price_str) if price_str else 0.0
-
-                # Skip invalid items
-                if not item_name or price <= 0 or price > 1000:
-                    logger.warning(f"Skipping invalid item: '{item_name}' - ${price} (empty name or invalid price)")
-                    continue
-
-                logger.info(f"Found valid item: '{item_name}' - ${price:.2f}")
-                items.append((item_name, price))
-
-            except ValueError:
-                logger.warning(f"Could not parse price for item '{item_name}': {price_str}")
+                if isinstance(price, str):
+                    # Remove currency symbols and convert
+                    price = float(re.sub(r'[^\d.]', '', price))
+                else:
+                    price = float(price)
+            except (ValueError, TypeError):
+                logger.warning(f"Could not parse price for item '{item_name}': {item.get('price')}")
                 continue
 
+            # Skip invalid items
+            if not item_name or price <= 0 or price > 1000:
+                logger.warning(f"Skipping invalid item: '{item_name}' - ${price} (empty name or invalid price)")
+                continue
+
+            logger.info(f"Found valid item: '{item_name}' - ${price:.2f}")
+            items.append((item_name, price))
+
     except Exception as e:
-        logger.error(f"Error parsing Donut output: {type(e).__name__}: {str(e)}", exc_info=True)
+        logger.error(f"Error parsing API output: {type(e).__name__}: {str(e)}", exc_info=True)
 
     logger.info(f"Total items parsed: {len(items)}")
     return items
@@ -219,7 +258,7 @@ def parse_receipt_data(donut_output):
 
 def process_receipt(image_path, store_name=None):
     """
-    Process a receipt image using Donut: extract structured data and parse items.
+    Process a receipt image using OpenRouter: extract structured data and parse items.
 
     Args:
         image_path: Path to the receipt image
@@ -227,29 +266,29 @@ def process_receipt(image_path, store_name=None):
 
     Returns:
         Dictionary with:
-        - 'text': Raw JSON output from Donut (as string)
+        - 'text': Raw JSON output from API (as string)
         - 'items': List of (item_name, price) tuples
-        - 'store_name': Store name if provided
-        - 'structured_data': Full structured output from Donut
+        - 'store_name': Store name if provided or detected
+        - 'structured_data': Full structured output from API
     """
-    logger.info(f"Processing receipt with Donut: {image_path}")
+    logger.info(f"Processing receipt with OpenRouter: {image_path}")
 
-    # Extract structured data from image using Donut
-    donut_output = extract_text_from_image(image_path)
+    # Extract structured data from image using OpenRouter
+    api_output = extract_text_from_image(image_path)
 
-    # Parse items and prices from Donut output
-    items = parse_receipt_data(donut_output)
+    # Parse items and prices from API output
+    items = parse_receipt_data(api_output)
     logger.info(f"Found {len(items)} items in receipt")
 
-    # Try to extract store name from Donut output if not provided
-    if not store_name and 'store' in donut_output:
-        store_name = donut_output.get('store', {}).get('name', None)
+    # Try to extract store name from API output if not provided
+    if not store_name and 'store_name' in api_output:
+        store_name = api_output.get('store_name', None)
         if store_name:
-            logger.info(f"Detected store name from Donut: {store_name}")
+            logger.info(f"Detected store name from API: {store_name}")
 
     return {
-        'text': str(donut_output),  # JSON output as string for compatibility
+        'text': json.dumps(api_output, indent=2),  # JSON output as formatted string
         'items': items,
         'store_name': store_name,
-        'structured_data': donut_output  # Full structured data for advanced use
+        'structured_data': api_output  # Full structured data for advanced use
     }

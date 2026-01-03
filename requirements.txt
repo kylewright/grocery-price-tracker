@@ -1,7 +1,4 @@
 Flask>=3.0.0
 Pillow>=10.2.0
 pillow-heif>=0.13.0
-torch>=2.0.0
-transformers>=4.30.0
-protobuf>=3.20.0
-sentencepiece>=0.1.99
+requests>=2.31.0
