@@ -126,11 +126,13 @@ def extract_text_from_image(image_path):
         sequence = sequence.replace(processor.tokenizer.eos_token, "").replace(processor.tokenizer.pad_token, "")
         sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()  # Remove first task token
 
-        logger.info(f"Raw model output: {sequence[:500]}...")
+        logger.info(f"Raw model output (first 500 chars): {sequence[:500]}...")
+        logger.info(f"Full raw model output length: {len(sequence)} characters")
 
         # Parse JSON output
         result = processor.token2json(sequence)
-        logger.info(f"Parsed JSON structure: {result}")
+        logger.info(f"Parsed JSON structure keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+        logger.info(f"Full parsed JSON: {result}")
 
         return result
 
@@ -155,6 +157,7 @@ def parse_receipt_data(donut_output):
         List of tuples (item_name, price)
     """
     logger.info("Parsing Donut output...")
+    logger.info(f"Full Donut output structure: {donut_output}")
     items = []
 
     try:
@@ -163,20 +166,26 @@ def parse_receipt_data(donut_output):
 
         if not menu_items:
             logger.warning("No menu items found in Donut output")
+            logger.warning(f"Available keys in output: {list(donut_output.keys())}")
             return items
 
         logger.info(f"Found {len(menu_items)} menu items in Donut output")
 
-        for item in menu_items:
+        for idx, item in enumerate(menu_items):
+            logger.info(f"Processing item {idx + 1}: {item}")
+
             # Extract name and price
             item_name = item.get('nm', '').strip()
             price_info = item.get('price', {})
 
             # Price can be a dict with 'price' key or directly a string
             if isinstance(price_info, dict):
-                price_str = price_info.get('price', '0')
+                # Could be {'price': '1.99'} or {'unitprice': '1.99', 'price': '3.98'}
+                price_str = price_info.get('price', price_info.get('unitprice', '0'))
             else:
                 price_str = str(price_info)
+
+            logger.info(f"Item '{item_name}' has price_info: {price_info}, extracted price_str: {price_str}")
 
             # Clean and parse price
             # Remove currency symbols and convert to float
@@ -187,10 +196,10 @@ def parse_receipt_data(donut_output):
 
                 # Skip invalid items
                 if not item_name or price <= 0 or price > 1000:
-                    logger.debug(f"Skipping invalid item: '{item_name}' - ${price}")
+                    logger.warning(f"Skipping invalid item: '{item_name}' - ${price} (empty name or invalid price)")
                     continue
 
-                logger.info(f"Found item: '{item_name}' - ${price:.2f}")
+                logger.info(f"Found valid item: '{item_name}' - ${price:.2f}")
                 items.append((item_name, price))
 
             except ValueError:
