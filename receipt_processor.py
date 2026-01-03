@@ -101,13 +101,16 @@ def extract_text_from_image(image_path, model=DEFAULT_MODEL):
         logger.info(f"Image encoded, size: {len(base64_image)} characters")
 
         # Prepare the prompt for receipt extraction
-        prompt = """Please analyze this receipt image and extract ALL items with their prices in JSON format.
+        prompt = """Analyze this grocery receipt image and extract each line item with its price.
 
-For each item on the receipt, extract:
-- The item name (product description)
-- The price (individual item price, not quantity × price)
+Instructions:
+1. Extract ONLY items that appear as products on the receipt
+2. Use the exact item name as printed
+3. Use the individual item price (not quantity × unit price)
+4. Skip: tax lines, subtotals, totals, payment info, bottle deposits
+5. Do NOT duplicate items - each unique line should appear once
 
-Return ONLY a valid JSON object with this structure:
+Return a valid JSON object with this exact structure:
 {
   "items": [
     {"name": "ITEM NAME", "price": 1.99},
@@ -118,12 +121,10 @@ Return ONLY a valid JSON object with this structure:
   "store_name": "Store Name"
 }
 
-Important:
-- Extract ALL line items from the receipt
-- Use the individual item price, not totals for quantities
-- Skip non-product lines (tax, subtotal, total, payment info)
-- Price should be a number (float), not a string
-- Return valid JSON only, no other text"""
+Requirements:
+- Price must be a number (float), not a string
+- Extract each item ONCE - do not repeat
+- Return ONLY valid JSON, no markdown formatting or extra text"""
 
         # Make API request to OpenRouter
         headers = {
@@ -151,7 +152,7 @@ Important:
                     ]
                 }
             ],
-            'max_tokens': 4000,
+            'max_tokens': 16000,  # High limit for long receipts
             'temperature': 0.1,  # Low temperature for consistent, accurate extraction
         }
 
@@ -168,6 +169,13 @@ Important:
 
         response_text = result['choices'][0]['message']['content']
         logger.info(f"Raw API response (first 500 chars): {response_text[:500]}...")
+        logger.info(f"Response text length: {len(response_text)} characters")
+
+        # Check if response was truncated
+        finish_reason = result['choices'][0].get('finish_reason', 'unknown')
+        logger.info(f"Finish reason: {finish_reason}")
+        if finish_reason == 'length':
+            logger.warning("WARNING: API response was truncated due to max_tokens limit!")
 
         # Parse JSON from response
         # Sometimes the model wraps JSON in markdown code blocks
@@ -180,10 +188,27 @@ Important:
             response_text = response_text[:-3]  # Remove trailing ```
         response_text = response_text.strip()
 
+        # Try to fix incomplete JSON by adding closing brackets if needed
+        if not response_text.endswith('}'):
+            logger.warning("JSON appears incomplete, attempting to fix...")
+            # Count opening and closing brackets
+            open_braces = response_text.count('{')
+            close_braces = response_text.count('}')
+            open_brackets = response_text.count('[')
+            close_brackets = response_text.count(']')
+
+            # Add missing closing brackets
+            if open_brackets > close_brackets:
+                response_text += ']' * (open_brackets - close_brackets)
+            if open_braces > close_braces:
+                response_text += '}' * (open_braces - close_braces)
+
+            logger.info(f"Fixed JSON (last 200 chars): ...{response_text[-200:]}")
+
         # Parse JSON
         parsed_data = json.loads(response_text)
         logger.info(f"Parsed JSON structure: {list(parsed_data.keys())}")
-        logger.info(f"Full parsed data: {parsed_data}")
+        logger.info(f"Number of items extracted: {len(parsed_data.get('items', []))}")
 
         return parsed_data
 
